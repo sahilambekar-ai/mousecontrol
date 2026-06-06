@@ -1,0 +1,27 @@
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon\r
+._*
+
+# Files that might be created by the Xcode/Swift build process
+build/
+DerivedData/
+.build/
+.swiftpm/
+
+# Application Bundle (compiled executable target)
+MouseControl.app/
+
+# Temporary files and logs
+run.log
+*.log
+*.tmp
+AppIcon.iconset/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*~
