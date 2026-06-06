@@ -12,6 +12,7 @@ MouseControl is a lightweight, native macOS menu-bar utility written in Swift an
 - **Robust Persistence**: Configurations are stored atomically in `~/Library/Application Support/MouseControl/config.json` as a safeguard against system force-quits, with fallback synchronization to `UserDefaults`.
 - **Automatic Asset Generation**: Build script leverages native macOS tools (`sips` and `iconutil`) to scale and generate high-resolution Apple `.icns` files on the fly.
 
+
 ---
 
 ## Getting Started
