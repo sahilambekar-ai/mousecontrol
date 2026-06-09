@@ -10,9 +10,10 @@ APP_NAME="MouseControl.app"
 MACOS_DIR="${APP_NAME}/Contents/MacOS"
 RESOURCES_DIR="${APP_NAME}/Contents/Resources"
 
-# 1. Clean previous builds
+# 1. Clean previous builds and kill running app instances
+echo "[1/6] Terminating running app instances and removing old bundle..."
+killall MouseControl 2>/dev/null || true
 if [ -d "${APP_NAME}" ]; then
-    echo "[1/6] Removing old application bundle..."
     rm -rf "${APP_NAME}"
 fi
 

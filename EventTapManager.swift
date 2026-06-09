@@ -174,10 +174,8 @@ public final class EventTapManager: ObservableObject {
             let device = Unmanaged<IOHIDDevice>.fromOpaque(sender).takeUnretainedValue()
             if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
                 let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
-                DispatchQueue.main.async {
-                    if manager.lastActiveDeviceName != name {
-                        manager.lastActiveDeviceName = name
-                    }
+                if manager.lastActiveDeviceName != name {
+                    manager.lastActiveDeviceName = name
                 }
             }
         }, selfPointer)
