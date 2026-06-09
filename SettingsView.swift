@@ -292,10 +292,27 @@ public struct SettingsView: View {
                         
                         // Footer Operations (Add Mapping Button and Toggle)
                         HStack {
-                            Toggle("Show Desktop ➡️ Stage Manager", isOn: $settings.toggleStageManagerOnShowDesktop)
-                                .toggleStyle(.checkbox)
-                                .font(.system(size: 10))
-                                .padding(.leading, 12)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Toggle("Show Desktop ➡️ Stage Manager", isOn: $settings.toggleStageManagerOnShowDesktop)
+                                    .toggleStyle(.checkbox)
+                                    .font(.system(size: 10))
+                                    .onChange(of: settings.toggleStageManagerOnShowDesktop) { newValue in
+                                        if newValue {
+                                            settings.toggleMissionControlOnShowDesktop = false
+                                        }
+                                    }
+                                
+                                Toggle("Show Desktop ➡️ Mission Control", isOn: $settings.toggleMissionControlOnShowDesktop)
+                                    .toggleStyle(.checkbox)
+                                    .font(.system(size: 10))
+                                    .onChange(of: settings.toggleMissionControlOnShowDesktop) { newValue in
+                                        if newValue {
+                                            settings.toggleStageManagerOnShowDesktop = false
+                                        }
+                                    }
+                            }
+                            .padding(.leading, 12)
+                            .padding(.vertical, 4)
                             
                             Spacer()
                             
@@ -501,7 +518,7 @@ public struct SettingsView: View {
                 .background(Color(NSColor.windowBackgroundColor))
             }
         }
-        .frame(width: 640, height: 480)
+        .frame(minWidth: 640, maxWidth: .infinity, minHeight: 480, maxHeight: .infinity)
         .sheet(isPresented: $showingAddSheet) {
             AddMappingSheet(
                 isPresented: $showingAddSheet,

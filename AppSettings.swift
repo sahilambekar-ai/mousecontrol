@@ -7,6 +7,7 @@ public final class AppSettings: ObservableObject {
     private let mappingsKey = "com.sahil.MouseControl.mappings"
     private let enabledKey = "com.sahil.MouseControl.isEnabled"
     private let stageManagerToggleKey = "com.sahil.MouseControl.toggleStageManagerOnShowDesktop"
+    private let missionControlToggleKey = "com.sahil.MouseControl.toggleMissionControlOnShowDesktop"
     
     // Path to Application Support config file for force-quit resiliency
     private var configFilePath: URL? {
@@ -43,9 +44,17 @@ public final class AppSettings: ObservableObject {
         }
     }
     
+    @Published public var toggleMissionControlOnShowDesktop: Bool = false {
+        didSet {
+            UserDefaults.standard.set(toggleMissionControlOnShowDesktop, forKey: missionControlToggleKey)
+            UserDefaults.standard.synchronize()
+        }
+    }
+    
     private init() {
         self.isEnabled = UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
         self.toggleStageManagerOnShowDesktop = UserDefaults.standard.bool(forKey: stageManagerToggleKey)
+        self.toggleMissionControlOnShowDesktop = UserDefaults.standard.bool(forKey: missionControlToggleKey)
         loadMappings()
         
         // Populate default mappings if empty on first run

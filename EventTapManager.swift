@@ -168,12 +168,13 @@ public final class EventTapManager: ObservableObject {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.hidManager = manager
         
-        let deviceMatch: [String: Any] = [
-            "DeviceUsagePage": 0x01,
-            "DeviceUsage": 0x02
+        // Match both mice (0x02) and keyboards (0x06) in IOHIDManager
+        let deviceMatches: [[String: Any]] = [
+            ["DeviceUsagePage": 0x01, "DeviceUsage": 0x02], // Mouse
+            ["DeviceUsagePage": 0x01, "DeviceUsage": 0x06]  // Keyboard
         ]
         
-        IOHIDManagerSetDeviceMatching(manager, deviceMatch as CFDictionary)
+        IOHIDManagerSetDeviceMatchingMultiple(manager, (deviceMatches as NSArray) as CFArray)
         
         let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
@@ -216,9 +217,14 @@ public final class EventTapManager: ObservableObject {
         
         if let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> {
             for device in devices {
-                if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
-                    if !miceNames.contains(name) {
-                        miceNames.append(name)
+                // Filter out non-mice (we only add devices where primary usage is 0x02 to miceNames)
+                let usage = IOHIDDeviceGetProperty(device, "PrimaryUsage" as CFString) as? Int ?? 0
+                let usagePage = IOHIDDeviceGetProperty(device, "PrimaryUsagePage" as CFString) as? Int ?? 0
+                if usage == 0x02 && usagePage == 0x01 {
+                    if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
+                        if !miceNames.contains(name) {
+                            miceNames.append(name)
+                        }
                     }
                 }
             }
@@ -296,13 +302,28 @@ public final class EventTapManager: ObservableObject {
                 self.lastActiveKeyEvent = "Key \(type == .keyDown ? "Down" : "Up"): \(keyCode) (\(name))"
             }
             
-            if AppSettings.shared.toggleStageManagerOnShowDesktop {
+            let isStageManagerActive = AppSettings.shared.toggleStageManagerOnShowDesktop
+            let isMissionControlActive = AppSettings.shared.toggleMissionControlOnShowDesktop
+            
+            if isStageManagerActive || isMissionControlActive {
+                // Identify if the event originated from a registered mouse device (ignoring actual keyboards)
+                let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+                
                 let isF11 = (keyCode == 103)
                 let isCmdF3 = (keyCode == 99 && flags.contains(.maskCommand))
                 
-                if isF11 || isCmdF3 {
+                // Intercept Cmd + D (keycode 2) OR raw D/F3 when sent by the mouse device
+                let isCmdD = (keyCode == 2 && flags.contains(.maskCommand) && isFromMouse)
+                let isF3OrDFromMouse = (keyCode == 99 || keyCode == 2) && isFromMouse
+                
+                if isF11 || isCmdF3 || isCmdD || isF3OrDFromMouse {
                     if type == .keyDown {
-                        toggleStageManager()
+                        if isStageManagerActive {
+                            toggleStageManager()
+                        } else {
+                            // Simulate Ctrl + Up Arrow (Mission Control)
+                            KeySimulator.shared.simulateTap(keyCode: 126, modifiers: ModifierFlags(control: true))
+                        }
                     }
                     return nil // Swallow the Show Desktop shortcut!
                 }
@@ -313,9 +334,26 @@ public final class EventTapManager: ObservableObject {
         // Log flagsChanged and systemDefined events to settings view
         if type == .flagsChanged {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            let flags = event.flags
+            
             DispatchQueue.main.async {
                 let name = nameForKeyCode(CGKeyCode(keyCode))
-                self.lastActiveKeyEvent = "FlagsChanged Key: \(keyCode) (\(name)) Flags: \(event.flags.rawValue)"
+                self.lastActiveKeyEvent = "FlagsChanged Key: \(keyCode) (\(name)) Flags: \(flags.rawValue)"
+            }
+            
+            // Swallow modifier key events (Command is keycode 54 or 55) if they originate from the mouse
+            let isStageManagerActive = AppSettings.shared.toggleStageManagerOnShowDesktop
+            let isMissionControlActive = AppSettings.shared.toggleMissionControlOnShowDesktop
+            if isStageManagerActive || isMissionControlActive {
+                let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+                if (keyCode == 54 || keyCode == 55) && isFromMouse {
+                    // On key release (Flags: 256, no command mask)
+                    if !flags.contains(.maskCommand) && isMissionControlActive {
+                        // Simulate Ctrl + Up Arrow (Mission Control)
+                        KeySimulator.shared.simulateTap(keyCode: 126, modifiers: ModifierFlags(control: true))
+                    }
+                    return nil // Swallow the Command key press/release from the mouse!
+                }
             }
         } else if typeVal == 14 {
             let nsEvent = NSEvent(cgEvent: event)
