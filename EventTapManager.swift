@@ -1,6 +1,8 @@
 import Cocoa
 import CoreGraphics
 import Combine
+import IOKit
+import IOKit.hid
 
 /// A C-style callback function required by CGEvent.tapCreate.
 /// Forwards events to the EventTapManager instance passed via the refcon userInfo pointer.
@@ -43,7 +45,16 @@ public final class EventTapManager: ObservableObject {
     // Track permission caching or creation failure state
     @Published public var hasFailedToStart: Bool = false
     
-    private init() {}
+    // IOHIDManager for physical mouse detection
+    private var hidManager: IOHIDManager?
+    @Published public var connectedMice: [String] = ["All Devices"]
+    @Published public var lastActiveDeviceName: String = "All Devices"
+    @Published public var lastActiveTrigger: MouseTrigger? = nil
+    @Published public var lastActiveKeyEvent: String = "None"
+    
+    private init() {
+        setupHIDManager()
+    }
     
     /// Returns true if the global event tap is currently active.
     public var isRunning: Bool {
@@ -71,6 +82,11 @@ public final class EventTapManager: ObservableObject {
                       | (UInt64(1) << CGEventType.leftMouseUp.rawValue)
                       | (UInt64(1) << CGEventType.rightMouseDown.rawValue)
                       | (UInt64(1) << CGEventType.rightMouseUp.rawValue)
+                      | (UInt64(1) << CGEventType.leftMouseDragged.rawValue)
+                      | (UInt64(1) << CGEventType.rightMouseDragged.rawValue)
+                      | (UInt64(1) << CGEventType.otherMouseDragged.rawValue)
+                      | (UInt64(1) << CGEventType.keyDown.rawValue)
+                      | (UInt64(1) << CGEventType.keyUp.rawValue)
         
         let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
@@ -126,14 +142,131 @@ public final class EventTapManager: ObservableObject {
         start()
     }
     
+    private func setupHIDManager() {
+        if hidManager != nil { return }
+        
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        self.hidManager = manager
+        
+        let deviceMatch: [String: Any] = [
+            "DeviceUsagePage": 0x01,
+            "DeviceUsage": 0x02
+        ]
+        
+        IOHIDManagerSetDeviceMatching(manager, deviceMatch as CFDictionary)
+        
+        let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        
+        IOHIDManagerRegisterDeviceMatchingCallback(manager, { (context, result, sender, device) in
+            guard let context = context else { return }
+            let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
+            manager.updateConnectedMice()
+        }, selfPointer)
+        
+        IOHIDManagerRegisterDeviceRemovalCallback(manager, { (context, result, sender, device) in
+            guard let context = context else { return }
+            let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
+            manager.updateConnectedMice()
+        }, selfPointer)
+        
+        IOHIDManagerRegisterInputValueCallback(manager, { (context, result, sender, value) in
+            guard let sender = sender, let context = context else { return }
+            let device = Unmanaged<IOHIDDevice>.fromOpaque(sender).takeUnretainedValue()
+            if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
+                let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
+                DispatchQueue.main.async {
+                    if manager.lastActiveDeviceName != name {
+                        manager.lastActiveDeviceName = name
+                    }
+                }
+            }
+        }, selfPointer)
+        
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        
+        let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        if openResult != kIOReturnSuccess {
+            print("[EventTapManager] Failed to open IOHIDManager: \(openResult)")
+        }
+        
+        updateConnectedMice()
+    }
+    
+    public func updateConnectedMice() {
+        guard let manager = hidManager else { return }
+        var miceNames: [String] = ["All Devices"]
+        
+        if let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> {
+            for device in devices {
+                if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
+                    if !miceNames.contains(name) {
+                        miceNames.append(name)
+                    }
+                }
+            }
+        }
+        
+        DispatchQueue.main.async {
+            self.connectedMice = miceNames
+            print("[EventTapManager] Connected mice: \(self.connectedMice)")
+        }
+    }
+    
+    public func toggleStageManager() {
+        let script = """
+        STATE=$(defaults read com.apple.WindowManager GloballyEnabled 2>/dev/null)
+        if [ "$STATE" = "1" ]; then
+            defaults write com.apple.WindowManager GloballyEnabled -bool false
+        else
+            defaults write com.apple.WindowManager GloballyEnabled -bool true
+        fi
+        killall Dock
+        """
+        
+        let process = Process()
+        process.launchPath = "/bin/bash"
+        process.arguments = ["-c", script]
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.launch()
+            process.waitUntilExit()
+            print("[EventTapManager] Stage Manager toggled. Exit code: \(process.terminationStatus)")
+        }
+    }
+    
     /// Processes incoming mouse events.
     /// - Returns: The event to forward to the OS, or nil if the event is swallowed.
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> CGEvent? {
+        // Intercept keyboard events for Stage Manager toggle
+        if type == .keyDown || type == .keyUp {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            let flags = event.flags
+            
+            // Log keyboard event for real-time debug display
+            DispatchQueue.main.async {
+                let name = nameForKeyCode(CGKeyCode(keyCode))
+                self.lastActiveKeyEvent = "Keycode \(keyCode) (\(name))"
+            }
+            
+            if AppSettings.shared.toggleStageManagerOnShowDesktop {
+                let isF11 = (keyCode == 103)
+                let isCmdF3 = (keyCode == 99 && flags.contains(.maskCommand))
+                
+                if isF11 || isCmdF3 {
+                    if type == .keyDown {
+                        toggleStageManager()
+                    }
+                    return nil // Swallow the Show Desktop shortcut!
+                }
+            }
+            return event // Let all other keyboard events pass through immediately!
+        }
+        
         // 1. Handle recording mode (recording a trigger in Settings)
         if isRecording {
             if let trigger = detectTrigger(type: type, event: event) {
-                // Ensure we only record on the "Down" action to avoid double-firing on release
-                if isDownEvent(type: type) {
+                // Ensure we record on the "Down" action or scroll events
+                if isDownEvent(type: type) || type == .scrollWheel {
                     DispatchQueue.main.async {
                         self.onMouseTriggerDetected?(trigger)
                     }
@@ -150,9 +283,28 @@ public final class EventTapManager: ObservableObject {
         
         // 3. Match mouse triggers to configured mappings
         if let trigger = detectTrigger(type: type, event: event) {
-            if let mapping = AppSettings.shared.mappings.first(where: { $0.trigger == trigger && $0.isEnabled }) {
+            // Update last active trigger for UI highlight flashing
+            DispatchQueue.main.async {
+                self.lastActiveTrigger = trigger
+                // Clear the trigger highlight after 0.5s to flash it
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    if self.lastActiveTrigger == trigger {
+                        self.lastActiveTrigger = nil
+                    }
+                }
+            }
+            
+            let activeDevice = self.lastActiveDeviceName
+            if let mapping = AppSettings.shared.mappings.first(where: { 
+                $0.trigger == trigger && 
+                $0.isEnabled && 
+                ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
+            }) {
                 switch trigger {
                 case .button:
+                    if isDragEvent(type: type) {
+                        return nil // Swallow drag events for mapped buttons without triggering key actions
+                    }
                     let isDown = isDownEvent(type: type)
                     KeySimulator.shared.simulateShortcut(
                         keyCode: mapping.shortcut.keyCode,
@@ -181,16 +333,21 @@ public final class EventTapManager: ObservableObject {
         return type == .otherMouseDown || type == .leftMouseDown || type == .rightMouseDown
     }
     
+    /// Helper to identify if an event represents a button click drag
+    private func isDragEvent(type: CGEventType) -> Bool {
+        return type == .otherMouseDragged || type == .leftMouseDragged || type == .rightMouseDragged
+    }
+    
     /// Detects the MouseTrigger enum value from a low-level CGEvent.
     private func detectTrigger(type: CGEventType, event: CGEvent) -> MouseTrigger? {
         switch type {
-        case .leftMouseDown, .leftMouseUp:
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged:
             return .button(0)
             
-        case .rightMouseDown, .rightMouseUp:
+        case .rightMouseDown, .rightMouseUp, .rightMouseDragged:
             return .button(1)
             
-        case .otherMouseDown, .otherMouseUp:
+        case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
             let buttonNum = event.getIntegerValueField(.mouseEventButtonNumber)
             return .button(Int(buttonNum))
             

@@ -107,12 +107,27 @@ public struct MouseMapping: Codable, Identifiable, Equatable, Hashable {
     public var trigger: MouseTrigger
     public var shortcut: KeyboardShortcut
     public var isEnabled: Bool
+    public var deviceName: String
     
-    public init(id: UUID = UUID(), trigger: MouseTrigger, shortcut: KeyboardShortcut, isEnabled: Bool = true) {
+    public init(id: UUID = UUID(), trigger: MouseTrigger, shortcut: KeyboardShortcut, isEnabled: Bool = true, deviceName: String = "All Devices") {
         self.id = id
         self.trigger = trigger
         self.shortcut = shortcut
         self.isEnabled = isEnabled
+        self.deviceName = deviceName
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, trigger, shortcut, isEnabled, deviceName
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.trigger = try container.decode(MouseTrigger.self, forKey: .trigger)
+        self.shortcut = try container.decode(KeyboardShortcut.self, forKey: .shortcut)
+        self.isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        self.deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName) ?? "All Devices"
     }
 }
 

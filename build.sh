@@ -67,9 +67,12 @@ swiftc -O \
     AppDelegate.swift \
     main.swift
 
-# 6. Package property list metadata
-echo "[6/6] Packaging Info.plist application metadata..."
+# 6. Package property list metadata and assets
+echo "[6/6] Packaging Info.plist application metadata and UI resources..."
 cp Info.plist "${APP_NAME}/Contents/Info.plist"
+if [ -f "mouse_icon.png" ]; then
+    cp mouse_icon.png "${RESOURCES_DIR}/mouse_icon.png"
+fi
 
 echo ""
 echo "============================================="
