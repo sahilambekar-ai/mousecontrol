@@ -480,8 +480,11 @@ public struct SettingsView: View {
                     
                     if tapManager.lastActiveKeyEvent != "None" {
                         Text("Last Key Event: \(tapManager.lastActiveKeyEvent)")
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(nil)
+                            .padding(.horizontal, 10)
                             .padding(.bottom, 2)
                     }
                     

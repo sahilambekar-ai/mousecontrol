@@ -69,9 +69,27 @@ public final class EventTapManager: ObservableObject {
         }
     }
     
+    private func logEventToFile(_ message: String) {
+        let logPath = "/Users/sahil/Documents/work/practice/mousecontrol/run.log"
+        let line = "[\(Date())] \(message)\n"
+        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+            fileHandle.seekToEndOfFile()
+            if let data = line.data(using: .utf8) {
+                fileHandle.write(data)
+            }
+            fileHandle.closeFile()
+        } else {
+            try? line.write(toFile: logPath, atomically: true, encoding: .utf8)
+        }
+    }
+
     /// Starts capturing global mouse events.
     public func start() {
         if isRunning { return }
+        
+        // Reset or create run.log on start
+        let logPath = "/Users/sahil/Documents/work/practice/mousecontrol/run.log"
+        try? "=== MouseControl Started at \(Date()) ===\n".write(toFile: logPath, atomically: true, encoding: .utf8)
         
         // Listen to all relevant mouse press, release, and scroll events
         // Ensure 64-bit explicit shift values to prevent type inference overflow issues
@@ -87,6 +105,8 @@ public final class EventTapManager: ObservableObject {
                       | (UInt64(1) << CGEventType.otherMouseDragged.rawValue)
                       | (UInt64(1) << CGEventType.keyDown.rawValue)
                       | (UInt64(1) << CGEventType.keyUp.rawValue)
+                      | (UInt64(1) << CGEventType.flagsChanged.rawValue)
+                      | (UInt64(1) << 14) // systemDefined / NX_SYSDEFINED
         
         let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
@@ -235,6 +255,36 @@ public final class EventTapManager: ObservableObject {
     /// Processes incoming mouse events.
     /// - Returns: The event to forward to the OS, or nil if the event is swallowed.
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> CGEvent? {
+        // Log all captured events to file for diagnostics
+        let typeVal = type.rawValue
+        var logMsg = "Event Type: \(typeVal)"
+        
+        if type == .keyDown || type == .keyUp {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            logMsg += " (Key \(type == .keyDown ? "Down" : "Up")), KeyCode: \(keyCode), Flags: \(event.flags.rawValue)"
+        } else if type == .flagsChanged {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            logMsg += " (FlagsChanged), KeyCode: \(keyCode), Flags: \(event.flags.rawValue)"
+        } else if type == .otherMouseDown || type == .otherMouseUp {
+            let buttonNum = event.getIntegerValueField(.mouseEventButtonNumber)
+            logMsg += " (OtherMouse \(type == .otherMouseDown ? "Down" : "Up")), Button: \(buttonNum)"
+        } else if type == .leftMouseDown || type == .leftMouseUp {
+            logMsg += " (LeftMouse \(type == .leftMouseDown ? "Down" : "Up"))"
+        } else if type == .rightMouseDown || type == .rightMouseUp {
+            logMsg += " (RightMouse \(type == .rightMouseDown ? "Down" : "Up"))"
+        } else if typeVal == 14 {
+            let nsEvent = NSEvent(cgEvent: event)
+            let subtype = nsEvent?.subtype.rawValue ?? -1
+            let data1 = nsEvent?.data1 ?? -1
+            let data2 = nsEvent?.data2 ?? -1
+            logMsg += " (SystemDefined), Subtype: \(subtype), Data1: \(data1), Data2: \(data2)"
+        } else if type == .scrollWheel {
+            let deltaY = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+            let deltaX = event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
+            logMsg += " (Scroll), DeltaY: \(deltaY), DeltaX: \(deltaX)"
+        }
+        logEventToFile(logMsg)
+        
         // Intercept keyboard events for Stage Manager toggle
         if type == .keyDown || type == .keyUp {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -243,7 +293,7 @@ public final class EventTapManager: ObservableObject {
             // Log keyboard event for real-time debug display
             DispatchQueue.main.async {
                 let name = nameForKeyCode(CGKeyCode(keyCode))
-                self.lastActiveKeyEvent = "Keycode \(keyCode) (\(name))"
+                self.lastActiveKeyEvent = "Key \(type == .keyDown ? "Down" : "Up"): \(keyCode) (\(name))"
             }
             
             if AppSettings.shared.toggleStageManagerOnShowDesktop {
@@ -258,6 +308,23 @@ public final class EventTapManager: ObservableObject {
                 }
             }
             return event // Let all other keyboard events pass through immediately!
+        }
+        
+        // Log flagsChanged and systemDefined events to settings view
+        if type == .flagsChanged {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            DispatchQueue.main.async {
+                let name = nameForKeyCode(CGKeyCode(keyCode))
+                self.lastActiveKeyEvent = "FlagsChanged Key: \(keyCode) (\(name)) Flags: \(event.flags.rawValue)"
+            }
+        } else if typeVal == 14 {
+            let nsEvent = NSEvent(cgEvent: event)
+            let subtype = nsEvent?.subtype.rawValue ?? -1
+            let data1 = nsEvent?.data1 ?? -1
+            let data2 = nsEvent?.data2 ?? -1
+            DispatchQueue.main.async {
+                self.lastActiveKeyEvent = "SystemDefined Subtype:\(subtype) D1:\(data1) D2:\(data2)"
+            }
         }
         
         // 1. Handle recording mode (recording a trigger in Settings)
