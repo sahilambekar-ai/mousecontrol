@@ -168,13 +168,8 @@ public final class EventTapManager: ObservableObject {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.hidManager = manager
         
-        // Match both mice (0x02) and keyboards (0x06) in IOHIDManager
-        let deviceMatches: [[String: Any]] = [
-            ["DeviceUsagePage": 0x01, "DeviceUsage": 0x02], // Mouse
-            ["DeviceUsagePage": 0x01, "DeviceUsage": 0x06]  // Keyboard
-        ]
-        
-        IOHIDManagerSetDeviceMatchingMultiple(manager, (deviceMatches as NSArray) as CFArray)
+        // Match ALL connected HID devices to capture consumer control & secondary interfaces of the mouse
+        IOHIDManagerSetDeviceMatching(manager, nil)
         
         let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
