@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MouseControl Web Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">🖱️</span>
+                <div class="logo-text">
+                    <h1>MouseControl</h1>
+                    <p class="subtitle">Zero-Download macOS Customizer</p>
+                </div>
+            </div>
+            <div class="status-indicator offline" id="status-badge">
+                <span class="pulse-dot"></span>
+                <span class="status-label" id="status-label">Offline</span>
+            </div>
+        </header>
+
+        <main class="app-grid">
+            <!-- Sidebar Setup Guide -->
+            <section class="card setup-card">
+                <h2>Quick Connection Guide</h2>
+                <p class="description">Run this single terminal command to install and start the background daemon. No app download needed.</p>
+                
+                <div class="terminal-box">
+                    <div class="terminal-header">
+                        <span class="dot red"></span>
+                        <span class="dot yellow"></span>
+                        <span class="dot green"></span>
+                        <span class="terminal-title">Terminal</span>
+                    </div>
+                    <div class="terminal-body">
+                        <code>curl -fsSL http://localhost:9002/install.sh | bash</code>
+                        <button class="copy-btn" id="copy-command-btn" title="Copy to clipboard">
+                            <span class="copy-icon">📋</span>
+                            <span class="copy-text">Copy</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="info-steps">
+                    <div class="step">
+                        <div class="step-num">1</div>
+                        <div class="step-content">
+                            <h3>Run Command</h3>
+                            <p>Paste the curl command in Terminal. It compiles a local lightweight binary.</p>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">2</div>
+                        <div class="step-content">
+                            <h3>Enable Accessibility</h3>
+                            <p>When prompted by macOS, grant Accessibility permissions to <strong>Terminal</strong> (or your terminal app).</p>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">3</div>
+                        <div class="step-content">
+                            <h3>Customize</h3>
+                            <p>Use this browser page to instantly add, edit, and toggle custom shortcuts.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Main Control Panel -->
+            <section class="main-panel">
+                <!-- Global Config Control Bar -->
+                <div class="card control-bar">
+                    <div class="control-label">
+                        <h2>Global Remapping Engine</h2>
+                        <p id="engine-status-text">Active & listening to mouse events</p>
+                    </div>
+                    <label class="switch-container">
+                        <input type="checkbox" id="global-toggle" disabled>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <!-- Live Monitoring Stream -->
+                <div class="card monitor-card">
+                    <div class="monitor-header">
+                        <h3>Live Event Monitor</h3>
+                        <span class="pulse-line"></span>
+                    </div>
+                    <div class="monitor-stats">
+                        <div class="stat-box">
+                            <span class="stat-title">Last Mouse Trigger</span>
+                            <span class="stat-value" id="last-mouse-trigger">-</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-title">Last Keyboard Simulation</span>
+                            <span class="stat-value" id="last-keyboard-action">-</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-title">Active Device</span>
+                            <span class="stat-value text-truncate" id="active-device">None</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mappings Manager -->
+                <div class="card mappings-card">
+                    <div class="mappings-header">
+                        <h2>Custom Mouse Mappings</h2>
+                        <button class="btn btn-primary" id="add-mapping-btn" disabled>+ Add Mapping</button>
+                    </div>
+                    <div id="mappings-list" class="mappings-list">
+                        <!-- Dynamic list populated by Javascript -->
+                        <div class="empty-state">
+                            <p>Loading configuration from daemon...</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Add/Edit Mapping Modal -->
+    <div class="modal-backdrop" id="mapping-modal">
+        <div class="modal card">
+            <div class="modal-header">
+                <h2 id="modal-title">Create New Mapping</h2>
+                <button class="close-btn" id="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="mapping-form">
+                    <input type="hidden" id="mapping-id">
+                    
+                    <!-- Trigger selection -->
+                    <div class="form-group">
+                        <label>1. Select Mouse Trigger</label>
+                        <div class="trigger-type-selector">
+                            <button type="button" class="type-btn active" data-type="button">Mouse Button</button>
+                            <button type="button" class="type-btn" data-type="scroll">Scroll Wheel</button>
+                        </div>
+                    </div>
+
+                    <!-- Trigger configuration -->
+                    <div class="form-group" id="button-config-group">
+                        <label for="button-selector">Mouse Button</label>
+                        <div class="input-recorder-row">
+                            <select id="button-selector" class="form-control">
+                                <option value="0">Left Click (Button 0)</option>
+                                <option value="1">Right Click (Button 1)</option>
+                                <option value="2">Middle Click (Button 2)</option>
+                                <option value="3">Mouse Button 3</option>
+                                <option value="4" selected>Mouse Button 4 (Side Back)</option>
+                                <option value="5">Mouse Button 5 (Side Forward)</option>
+                                <option value="6">Mouse Button 6</option>
+                                <option value="7">Mouse Button 7</option>
+                                <option value="8">Mouse Button 8</option>
+                            </select>
+                            <button type="button" class="btn btn-secondary" id="record-mouse-btn">Record Click</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group hidden" id="scroll-config-group">
+                        <label for="scroll-selector">Scroll Direction</label>
+                        <select id="scroll-selector" class="form-control">
+                            <option value="Scroll Up">Scroll Up</option>
+                            <option value="Scroll Down">Scroll Down</option>
+                            <option value="Scroll Left">Scroll Left</option>
+                            <option value="Scroll Right">Scroll Right</option>
+                        </select>
+                    </div>
+
+                    <!-- Keyboard Shortcut Simulation -->
+                    <div class="form-group">
+                        <label>2. Maps to Keyboard Shortcut</label>
+                        <div class="modifiers-row">
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="mod-cmd">
+                                <span class="checkmark"></span>
+                                ⌘ Cmd
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="mod-ctrl">
+                                <span class="checkmark"></span>
+                                ⌃ Ctrl
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="mod-opt">
+                                <span class="checkmark"></span>
+                                ⌥ Opt
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="mod-shift">
+                                <span class="checkmark"></span>
+                                ⇧ Shift
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="key-selector">Destination Key</label>
+                        <div class="input-recorder-row">
+                            <select id="key-selector" class="form-control">
+                                <!-- Populated dynamically by JS from keycodes map -->
+                            </select>
+                            <button type="button" class="btn btn-secondary" id="record-key-btn">Record Key</button>
+                        </div>
+                        <span class="help-text" id="recording-indicator">Click "Record Key" and press a key on your keyboard.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="device-selector">Target Device</label>
+                        <select id="device-selector" class="form-control">
+                            <option value="All Devices">All Devices</option>
+                        </select>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="save-mapping-submit">Save Mapping</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert toast for notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
