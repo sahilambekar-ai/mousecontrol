@@ -1,4 +1,5 @@
 import Foundation
+import Cocoa
 import Combine
 
 public final class AppSettings: ObservableObject {
@@ -8,6 +9,7 @@ public final class AppSettings: ObservableObject {
     private let enabledKey = "com.sahil.MouseControl.isEnabled"
     private let stageManagerToggleKey = "com.sahil.MouseControl.toggleStageManagerOnShowDesktop"
     private let missionControlToggleKey = "com.sahil.MouseControl.toggleMissionControlOnShowDesktop"
+    private let themeKey = "com.sahil.MouseControl.themeMode"
     
     // Path to Application Support config file for force-quit resiliency
     private var configFilePath: URL? {
@@ -51,10 +53,34 @@ public final class AppSettings: ObservableObject {
         }
     }
     
+    /// Theme mode: "system", "light", or "dark"
+    @Published public var themeMode: String = "system" {
+        didSet {
+            UserDefaults.standard.set(themeMode, forKey: themeKey)
+            UserDefaults.standard.synchronize()
+            applyTheme()
+        }
+    }
+    
+    /// Applies the current theme to the entire application
+    public func applyTheme() {
+        DispatchQueue.main.async {
+            switch self.themeMode {
+            case "light":
+                NSApp.appearance = NSAppearance(named: .aqua)
+            case "dark":
+                NSApp.appearance = NSAppearance(named: .darkAqua)
+            default:
+                NSApp.appearance = nil // Follow system
+            }
+        }
+    }
+    
     private init() {
         self.isEnabled = UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
         self.toggleStageManagerOnShowDesktop = UserDefaults.standard.bool(forKey: stageManagerToggleKey)
         self.toggleMissionControlOnShowDesktop = UserDefaults.standard.bool(forKey: missionControlToggleKey)
+        self.themeMode = UserDefaults.standard.string(forKey: themeKey) ?? "system"
         loadMappings()
         
         // Populate default mappings if empty on first run

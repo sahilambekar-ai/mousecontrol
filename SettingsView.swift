@@ -94,6 +94,38 @@ public struct SettingsView: View {
                 
                 Spacer()
                 
+                // Theme Mode Toggle Button
+                Button(action: {
+                    switch settings.themeMode {
+                    case "system":
+                        settings.themeMode = "light"
+                    case "light":
+                        settings.themeMode = "dark"
+                    default:
+                        settings.themeMode = "system"
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: settings.themeMode == "dark" ? "moon.fill" : settings.themeMode == "light" ? "sun.max.fill" : "display")
+                            .font(.system(size: 11))
+                        Text(settings.themeMode == "dark" ? "Dark" : settings.themeMode == "light" ? "Light" : "Auto")
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                    }
+                    .foregroundColor(settings.themeMode == "dark" ? .purple : settings.themeMode == "light" ? .orange : .secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(settings.themeMode == "dark" ? Color.purple.opacity(0.15) : settings.themeMode == "light" ? Color.orange.opacity(0.12) : Color(NSColor.controlBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Cycle theme: System → Light → Dark")
+                
                 // Connection Status & Active Mouse Dropdown
                 HStack(spacing: 6) {
                     Circle()
@@ -211,7 +243,12 @@ public struct SettingsView: View {
                                 let listMappings = settings.mappings.filter { mapping in
                                     let matchesDevice = (selectedDevice == "All Devices" || mapping.deviceName == selectedDevice)
                                     if selectedTab == "Buttons" {
-                                        if case .button = mapping.trigger { return matchesDevice }
+                                        switch mapping.trigger {
+                                        case .button, .mouseKey, .systemEvent:
+                                            return matchesDevice
+                                        default:
+                                            return false
+                                        }
                                     } else {
                                         if case .scroll = mapping.trigger { return matchesDevice }
                                     }
@@ -293,23 +330,9 @@ public struct SettingsView: View {
                         // Footer Operations (Add Mapping Button and Toggle)
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Toggle("Show Desktop ➡️ Stage Manager", isOn: $settings.toggleStageManagerOnShowDesktop)
-                                    .toggleStyle(.checkbox)
-                                    .font(.system(size: 10))
-                                    .onChange(of: settings.toggleStageManagerOnShowDesktop) { newValue in
-                                        if newValue {
-                                            settings.toggleMissionControlOnShowDesktop = false
-                                        }
-                                    }
-                                
                                 Toggle("Show Desktop ➡️ Mission Control", isOn: $settings.toggleMissionControlOnShowDesktop)
                                     .toggleStyle(.checkbox)
                                     .font(.system(size: 10))
-                                    .onChange(of: settings.toggleMissionControlOnShowDesktop) { newValue in
-                                        if newValue {
-                                            settings.toggleStageManagerOnShowDesktop = false
-                                        }
-                                    }
                             }
                             .padding(.leading, 12)
                             .padding(.vertical, 4)
@@ -569,6 +592,11 @@ public struct SettingsView: View {
                         if tapManager.connectedMice.contains(tapManager.lastActiveDeviceName) {
                             selectedDevice = tapManager.lastActiveDeviceName
                         }
+                    }
+                case .mouseKey, .systemEvent:
+                    selectedTab = "Buttons"
+                    if tapManager.connectedMice.contains(tapManager.lastActiveDeviceName) {
+                        selectedDevice = tapManager.lastActiveDeviceName
                     }
                 case .scroll:
                     selectedTab = "Wheel"

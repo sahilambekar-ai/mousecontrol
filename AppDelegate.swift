@@ -6,6 +6,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // Apply saved theme preference before any UI appears
+        AppSettings.shared.applyTheme()
+        
         // Establish system status bar item
         setupMenuBar()
         

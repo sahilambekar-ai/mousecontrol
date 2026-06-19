@@ -52,6 +52,11 @@ public final class EventTapManager: ObservableObject {
     @Published public var lastActiveTrigger: MouseTrigger? = nil
     @Published public var lastActiveKeyEvent: String = "None"
     
+    // Scroll Drag State tracking for mapping button to "Scroll (Drag Mouse)"
+    private var isScrollDragActive = false
+    private var scrollDragStartPoint: CGPoint = .zero
+    private var scrollDragTrigger: MouseTrigger? = nil
+    
     private init() {
         setupHIDManager()
     }
@@ -103,6 +108,7 @@ public final class EventTapManager: ObservableObject {
                       | (UInt64(1) << CGEventType.leftMouseDragged.rawValue)
                       | (UInt64(1) << CGEventType.rightMouseDragged.rawValue)
                       | (UInt64(1) << CGEventType.otherMouseDragged.rawValue)
+                      | (UInt64(1) << CGEventType.mouseMoved.rawValue)
                       | (UInt64(1) << CGEventType.keyDown.rawValue)
                       | (UInt64(1) << CGEventType.keyUp.rawValue)
                       | (UInt64(1) << CGEventType.flagsChanged.rawValue)
@@ -256,6 +262,36 @@ public final class EventTapManager: ObservableObject {
     /// Processes incoming mouse events.
     /// - Returns: The event to forward to the OS, or nil if the event is swallowed.
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> CGEvent? {
+        // Handle active scroll-drag (pan scroll) mode
+        if isScrollDragActive {
+            if let dragTrigger = scrollDragTrigger, let trigger = detectTrigger(type: type, event: event), trigger == dragTrigger {
+                if type == .leftMouseUp || type == .rightMouseUp || type == .otherMouseUp || type == .keyUp {
+                    isScrollDragActive = false
+                    scrollDragTrigger = nil
+                    return nil // Swallow release
+                }
+            }
+            
+            if type == .mouseMoved || type == .leftMouseDragged || type == .rightMouseDragged || type == .otherMouseDragged {
+                let currentPoint = event.location
+                let dX = currentPoint.x - scrollDragStartPoint.x
+                let dY = currentPoint.y - scrollDragStartPoint.y
+                
+                let threshold: CGFloat = 8.0
+                if abs(dX) >= threshold || abs(dY) >= threshold {
+                    let scrollY = Int32(-dY / threshold)
+                    let scrollX = Int32(dX / threshold)
+                    
+                    if let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: scrollY, wheel2: scrollX, wheel3: 0) {
+                        scrollEvent.post(tap: CGEventTapLocation.cghidEventTap)
+                    }
+                    
+                    CGWarpMouseCursorPosition(scrollDragStartPoint)
+                }
+                return nil // Swallow mouse movement/dragging
+            }
+        }
+
         // Log all captured events to file for diagnostics
         let typeVal = type.rawValue
         var logMsg = "Event Type: \(typeVal)"
@@ -323,7 +359,25 @@ public final class EventTapManager: ObservableObject {
                     return nil // Swallow the Show Desktop shortcut!
                 }
             }
-            return event // Let all other keyboard events pass through immediately!
+            
+            // If it is a key event from the mouse, we want to intercept it and not let it pass through
+            let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+            if isFromMouse && !isRecording {
+                // Check if we have a mapping for this mouse key
+                let trigger = MouseTrigger.mouseKey(Int(keyCode))
+                let activeDevice = self.lastActiveDeviceName
+                if AppSettings.shared.mappings.contains(where: { 
+                    $0.trigger == trigger && 
+                    $0.isEnabled && 
+                    ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
+                }) {
+                    // Let the mapping code handle it below
+                } else {
+                    return event // Let standard unmapped mouse keyboard events through
+                }
+            } else if !isFromMouse {
+                return event // Let all other keyboard events pass through immediately!
+            }
         }
         
         // Log flagsChanged and systemDefined events to settings view
@@ -363,8 +417,8 @@ public final class EventTapManager: ObservableObject {
         // 1. Handle recording mode (recording a trigger in Settings)
         if isRecording {
             if let trigger = detectTrigger(type: type, event: event) {
-                // Ensure we record on the "Down" action or scroll events
-                if isDownEvent(type: type) || type == .scrollWheel {
+                // Ensure we record on the "Down" action, key down, scroll, or systemDefined events
+                if isDownEvent(type: type) || type == .scrollWheel || type == .keyDown || type.rawValue == 14 {
                     DispatchQueue.main.async {
                         self.onMouseTriggerDetected?(trigger)
                     }
@@ -398,27 +452,58 @@ public final class EventTapManager: ObservableObject {
                 $0.isEnabled && 
                 ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
             }) {
+                // Check if mapping is a virtual scroll action
+                if mapping.shortcut.keyCode >= 2000 && mapping.shortcut.keyCode <= 2004 {
+                    let isDown = isDownEvent(type: type) || type == .keyDown
+                    if isDown {
+                        if mapping.shortcut.keyCode == 2004 {
+                            // "Scroll (Drag Mouse)"
+                            isScrollDragActive = true
+                            scrollDragStartPoint = event.location
+                            scrollDragTrigger = trigger
+                        } else {
+                            // Single scroll ticks (Scroll Up/Down/Left/Right)
+                            let direction: ScrollDirection
+                            switch mapping.shortcut.keyCode {
+                            case 2000: direction = .up
+                            case 2001: direction = .down
+                            case 2002: direction = .left
+                            case 2003: direction = .right
+                            default: return nil
+                            }
+                            simulateScroll(direction: direction)
+                        }
+                    } else {
+                        // KeyUp / MouseUp: if we released the scroll-drag trigger, turn it off
+                        if trigger == scrollDragTrigger {
+                            isScrollDragActive = false
+                            scrollDragTrigger = nil
+                        }
+                    }
+                    return nil // Swallow the click/key press
+                }
+
                 switch trigger {
-                case .button:
+                case .button, .mouseKey:
                     if isDragEvent(type: type) {
                         return nil // Swallow drag events for mapped buttons without triggering key actions
                     }
-                    let isDown = isDownEvent(type: type)
+                    let isDown = isDownEvent(type: type) || type == .keyDown
                     KeySimulator.shared.simulateShortcut(
                         keyCode: mapping.shortcut.keyCode,
                         modifiers: mapping.shortcut.modifiers,
                         isDown: isDown
                     )
-                    return nil // Swallow the mouse click
+                    return nil // Swallow the mouse click or key press
                     
-                case .scroll:
-                    // Since scroll events represent momentum-based 'ticks' with no distinct held duration,
-                    // we simulate a full down-then-up tap on each scroll event we capture.
+                case .scroll, .systemEvent:
+                    // Since scroll and systemDefined events represent ticks or momentary system events with no distinct held duration,
+                    // we simulate a full down-then-up tap on each event we capture.
                     KeySimulator.shared.simulateTap(
                         keyCode: mapping.shortcut.keyCode,
                         modifiers: mapping.shortcut.modifiers
                     )
-                    return nil // Swallow the scroll wheel notch
+                    return nil // Swallow the event
                 }
             }
         }
@@ -436,6 +521,20 @@ public final class EventTapManager: ObservableObject {
         return type == .otherMouseDragged || type == .leftMouseDragged || type == .rightMouseDragged
     }
     
+    private func simulateScroll(direction: ScrollDirection) {
+        var scrollY: Int32 = 0
+        var scrollX: Int32 = 0
+        switch direction {
+        case .up: scrollY = 1
+        case .down: scrollY = -1
+        case .left: scrollX = -1
+        case .right: scrollX = 1
+        }
+        if let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: scrollY, wheel2: scrollX, wheel3: 0) {
+            scrollEvent.post(tap: CGEventTapLocation.cghidEventTap)
+        }
+    }
+    
     /// Detects the MouseTrigger enum value from a low-level CGEvent.
     private func detectTrigger(type: CGEventType, event: CGEvent) -> MouseTrigger? {
         switch type {
@@ -448,6 +547,13 @@ public final class EventTapManager: ObservableObject {
         case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
             let buttonNum = event.getIntegerValueField(.mouseEventButtonNumber)
             return .button(Int(buttonNum))
+            
+        case .keyDown, .keyUp:
+            let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+            if isFromMouse {
+                let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+                return .mouseKey(Int(keyCode))
+            }
             
         case .scrollWheel:
             let deltaY = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
@@ -465,6 +571,13 @@ public final class EventTapManager: ObservableObject {
             }
             
         default:
+            if type.rawValue == 14 {
+                let nsEvent = NSEvent(cgEvent: event)
+                let subtype = Int(nsEvent?.subtype.rawValue ?? -1)
+                let data1 = nsEvent?.data1 ?? -1
+                let data2 = nsEvent?.data2 ?? -1
+                return .systemEvent(subtype: subtype, data1: data1, data2: data2)
+            }
             break
         }
         

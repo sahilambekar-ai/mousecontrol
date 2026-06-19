@@ -11,6 +11,8 @@ public enum ScrollDirection: String, Codable, CaseIterable {
 public enum MouseTrigger: Codable, Hashable, Equatable {
     case button(Int)
     case scroll(ScrollDirection)
+    case mouseKey(Int) // Key code from mouse keyboard interface
+    case systemEvent(subtype: Int, data1: Int, data2: Int) // SystemDefined/NX_SYSDEFINED events
     
     public var displayName: String {
         switch self {
@@ -21,12 +23,22 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
             return "Mouse Button \(num)"
         case .scroll(let dir):
             return dir.rawValue
+        case .mouseKey(let keyCode):
+            let name = nameForKeyCode(CGKeyCode(keyCode))
+            return "Mouse Key: \(name) (Key \(keyCode))"
+        case .systemEvent(let subtype, let data1, let data2):
+            if subtype == 7 {
+                return "System Mouse Trigger (D1:\(data1) D2:\(data2))"
+            } else if subtype == 8 {
+                return "System Media Key (D1:\(data1))"
+            }
+            return "System Event (Subtype:\(subtype) D1:\(data1) D2:\(data2))"
         }
     }
     
     // Coding keys for manual serialization to support heterogeneous enum values easily
     private enum CodingKeys: String, CodingKey {
-        case type, buttonNumber, scrollDirection
+        case type, buttonNumber, scrollDirection, keyCode, subtype, data1, data2
     }
     
     public init(from decoder: Decoder) throws {
@@ -35,6 +47,14 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
         if type == "button" {
             let num = try container.decode(Int.self, forKey: .buttonNumber)
             self = .button(num)
+        } else if type == "mouseKey" {
+            let keyCode = try container.decode(Int.self, forKey: .keyCode)
+            self = .mouseKey(keyCode)
+        } else if type == "systemEvent" {
+            let subtype = try container.decode(Int.self, forKey: .subtype)
+            let data1 = try container.decode(Int.self, forKey: .data1)
+            let data2 = try container.decode(Int.self, forKey: .data2)
+            self = .systemEvent(subtype: subtype, data1: data1, data2: data2)
         } else {
             let dir = try container.decode(ScrollDirection.self, forKey: .scrollDirection)
             self = .scroll(dir)
@@ -50,6 +70,14 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
         case .scroll(let dir):
             try container.encode("scroll", forKey: .type)
             try container.encode(dir, forKey: .scrollDirection)
+        case .mouseKey(let keyCode):
+            try container.encode("mouseKey", forKey: .type)
+            try container.encode(keyCode, forKey: .keyCode)
+        case .systemEvent(let subtype, let data1, let data2):
+            try container.encode("systemEvent", forKey: .type)
+            try container.encode(subtype, forKey: .subtype)
+            try container.encode(data1, forKey: .data1)
+            try container.encode(data2, forKey: .data2)
         }
     }
 }
@@ -206,7 +234,14 @@ public let availableKeys: [KeyDefinition] = [
     KeyDefinition(keyCode: 101, name: "F9"),
     KeyDefinition(keyCode: 109, name: "F10"),
     KeyDefinition(keyCode: 103, name: "F11"),
-    KeyDefinition(keyCode: 111, name: "F12")
+    KeyDefinition(keyCode: 111, name: "F12"),
+    
+    // Special Virtual Actions
+    KeyDefinition(keyCode: 2000, name: "Scroll Up"),
+    KeyDefinition(keyCode: 2001, name: "Scroll Down"),
+    KeyDefinition(keyCode: 2002, name: "Scroll Left"),
+    KeyDefinition(keyCode: 2003, name: "Scroll Right"),
+    KeyDefinition(keyCode: 2004, name: "Scroll (Drag Mouse)")
 ]
 
 public func nameForKeyCode(_ code: CGKeyCode) -> String {
