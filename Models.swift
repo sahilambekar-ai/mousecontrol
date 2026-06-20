@@ -11,7 +11,7 @@ public enum ScrollDirection: String, Codable, CaseIterable {
 public enum MouseTrigger: Codable, Hashable, Equatable {
     case button(Int)
     case scroll(ScrollDirection)
-    case mouseKey(Int) // Key code from mouse keyboard interface
+    case mouseKey(keyCode: Int, hasCmd: Bool, hasCtrl: Bool, hasOpt: Bool, hasShift: Bool) // Key code from mouse keyboard interface with modifiers
     case systemEvent(subtype: Int, data1: Int, data2: Int) // SystemDefined/NX_SYSDEFINED events
     
     public var displayName: String {
@@ -23,9 +23,15 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
             return "Mouse Button \(num)"
         case .scroll(let dir):
             return dir.rawValue
-        case .mouseKey(let keyCode):
+        case .mouseKey(let keyCode, let hasCmd, let hasCtrl, let hasOpt, let hasShift):
             let name = nameForKeyCode(CGKeyCode(keyCode))
-            return "Mouse Key: \(name) (Key \(keyCode))"
+            var mods: [String] = []
+            if hasCtrl { mods.append("⌃") }
+            if hasOpt { mods.append("⌥") }
+            if hasShift { mods.append("⇧") }
+            if hasCmd { mods.append("⌘") }
+            let modsStr = mods.isEmpty ? "" : mods.joined(separator: " + ") + " + "
+            return "Mouse Key: \(modsStr)\(name) (Key \(keyCode))"
         case .systemEvent(let subtype, let data1, let data2):
             if subtype == 7 {
                 return "System Mouse Trigger (D1:\(data1) D2:\(data2))"
@@ -38,7 +44,7 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
     
     // Coding keys for manual serialization to support heterogeneous enum values easily
     private enum CodingKeys: String, CodingKey {
-        case type, buttonNumber, scrollDirection, keyCode, subtype, data1, data2
+        case type, buttonNumber, scrollDirection, keyCode, subtype, data1, data2, hasCmd, hasCtrl, hasOpt, hasShift
     }
     
     public init(from decoder: Decoder) throws {
@@ -49,7 +55,11 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
             self = .button(num)
         } else if type == "mouseKey" {
             let keyCode = try container.decode(Int.self, forKey: .keyCode)
-            self = .mouseKey(keyCode)
+            let hasCmd = try container.decodeIfPresent(Bool.self, forKey: .hasCmd) ?? false
+            let hasCtrl = try container.decodeIfPresent(Bool.self, forKey: .hasCtrl) ?? false
+            let hasOpt = try container.decodeIfPresent(Bool.self, forKey: .hasOpt) ?? false
+            let hasShift = try container.decodeIfPresent(Bool.self, forKey: .hasShift) ?? false
+            self = .mouseKey(keyCode: keyCode, hasCmd: hasCmd, hasCtrl: hasCtrl, hasOpt: hasOpt, hasShift: hasShift)
         } else if type == "systemEvent" {
             let subtype = try container.decode(Int.self, forKey: .subtype)
             let data1 = try container.decode(Int.self, forKey: .data1)
@@ -70,9 +80,13 @@ public enum MouseTrigger: Codable, Hashable, Equatable {
         case .scroll(let dir):
             try container.encode("scroll", forKey: .type)
             try container.encode(dir, forKey: .scrollDirection)
-        case .mouseKey(let keyCode):
+        case .mouseKey(let keyCode, let hasCmd, let hasCtrl, let hasOpt, let hasShift):
             try container.encode("mouseKey", forKey: .type)
             try container.encode(keyCode, forKey: .keyCode)
+            try container.encode(hasCmd, forKey: .hasCmd)
+            try container.encode(hasCtrl, forKey: .hasCtrl)
+            try container.encode(hasOpt, forKey: .hasOpt)
+            try container.encode(hasShift, forKey: .hasShift)
         case .systemEvent(let subtype, let data1, let data2):
             try container.encode("systemEvent", forKey: .type)
             try container.encode(subtype, forKey: .subtype)
@@ -136,17 +150,19 @@ public struct MouseMapping: Codable, Identifiable, Equatable, Hashable {
     public var shortcut: KeyboardShortcut
     public var isEnabled: Bool
     public var deviceName: String
+    public var profileName: String
     
-    public init(id: UUID = UUID(), trigger: MouseTrigger, shortcut: KeyboardShortcut, isEnabled: Bool = true, deviceName: String = "All Devices") {
+    public init(id: UUID = UUID(), trigger: MouseTrigger, shortcut: KeyboardShortcut, isEnabled: Bool = true, deviceName: String = "All Devices", profileName: String = "Default") {
         self.id = id
         self.trigger = trigger
         self.shortcut = shortcut
         self.isEnabled = isEnabled
         self.deviceName = deviceName
+        self.profileName = profileName
     }
     
     private enum CodingKeys: String, CodingKey {
-        case id, trigger, shortcut, isEnabled, deviceName
+        case id, trigger, shortcut, isEnabled, deviceName, profileName
     }
     
     public init(from decoder: Decoder) throws {
@@ -156,6 +172,7 @@ public struct MouseMapping: Codable, Identifiable, Equatable, Hashable {
         self.shortcut = try container.decode(KeyboardShortcut.self, forKey: .shortcut)
         self.isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
         self.deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName) ?? "All Devices"
+        self.profileName = try container.decodeIfPresent(String.self, forKey: .profileName) ?? "Default"
     }
 }
 
@@ -246,4 +263,25 @@ public let availableKeys: [KeyDefinition] = [
 
 public func nameForKeyCode(_ code: CGKeyCode) -> String {
     return availableKeys.first(where: { $0.keyCode == code })?.name ?? "Key \(code)"
+}
+
+public struct RawHIDEvent: Identifiable, Codable, Equatable {
+    public var id = UUID()
+    public let timestamp: Date
+    public let deviceName: String
+    public let vendorID: Int
+    public let productID: Int
+    public let usagePage: Int
+    public let usage: Int
+    public let value: Int
+    
+    public init(timestamp: Date = Date(), deviceName: String, vendorID: Int, productID: Int, usagePage: Int, usage: Int, value: Int) {
+        self.timestamp = timestamp
+        self.deviceName = deviceName
+        self.vendorID = vendorID
+        self.productID = productID
+        self.usagePage = usagePage
+        self.usage = usage
+        self.value = value
+    }
 }

@@ -10,6 +10,22 @@ public final class AppSettings: ObservableObject {
     private let stageManagerToggleKey = "com.sahil.MouseControl.toggleStageManagerOnShowDesktop"
     private let missionControlToggleKey = "com.sahil.MouseControl.toggleMissionControlOnShowDesktop"
     private let themeKey = "com.sahil.MouseControl.themeMode"
+    private let activeProfileKey = "com.sahil.MouseControl.activeProfile"
+    private let profilesKey = "com.sahil.MouseControl.profiles"
+    
+    @Published public var activeProfile: String = "Default" {
+        didSet {
+            UserDefaults.standard.set(activeProfile, forKey: activeProfileKey)
+            UserDefaults.standard.synchronize()
+        }
+    }
+    
+    @Published public var profiles: [String] = ["Default"] {
+        didSet {
+            UserDefaults.standard.set(profiles, forKey: profilesKey)
+            UserDefaults.standard.synchronize()
+        }
+    }
     
     // Path to Application Support config file for force-quit resiliency
     private var configFilePath: URL? {
@@ -81,6 +97,8 @@ public final class AppSettings: ObservableObject {
         self.toggleStageManagerOnShowDesktop = UserDefaults.standard.bool(forKey: stageManagerToggleKey)
         self.toggleMissionControlOnShowDesktop = UserDefaults.standard.bool(forKey: missionControlToggleKey)
         self.themeMode = UserDefaults.standard.string(forKey: themeKey) ?? "system"
+        self.activeProfile = UserDefaults.standard.string(forKey: activeProfileKey) ?? "Default"
+        self.profiles = UserDefaults.standard.stringArray(forKey: profilesKey) ?? ["Default"]
         loadMappings()
         
         // Populate default mappings if empty on first run

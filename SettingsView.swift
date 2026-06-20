@@ -9,7 +9,8 @@ public struct SettingsView: View {
     // UI state
     @State private var selectedTab = "Buttons"
     @State private var selectedDevice = "All Devices"
-    @State private var selectedProfile = "Default"
+    @State private var newProfileName = ""
+    @State private var showingCaptureSheet = false
     
     // UI state for adding a new mapping
     @State private var showingAddSheet = false
@@ -34,7 +35,7 @@ public struct SettingsView: View {
     // Flash effect for recently pressed hardware buttons
     @State private var highlightedTrigger: MouseTrigger? = nil
     
-    let tabs = ["Buttons", "Wheel", "Chords", "Cursor", "Device", "License & Support"]
+    let tabs = ["Buttons", "Wheel", "Chords", "Profiles", "Cursor", "Device", "HID Inspector", "License & Support"]
     
     public init() {}
     
@@ -74,23 +75,14 @@ public struct SettingsView: View {
                 .buttonStyle(.plain)
                 
                 // Profile Selector Dropdown
-                HStack(spacing: 0) {
-                    Picker("", selection: $selectedProfile) {
-                        Text("Default").tag("Default")
-                        Text("Gaming").tag("Gaming")
-                        Text("Productivity").tag("Productivity")
+                Picker("", selection: $settings.activeProfile) {
+                    ForEach(settings.profiles, id: \.self) { profile in
+                        Text(profile).tag(profile)
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(width: 120)
-                    
-                    Button("Edit") {
-                        // Action to edit profiles
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .padding(.leading, 6)
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 120)
                 
                 Spacer()
                 
@@ -125,6 +117,31 @@ public struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Cycle theme: System → Light → Dark")
+                
+                // Capture Tool Button
+                Button(action: {
+                    showingCaptureSheet = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hand.tap.fill")
+                            .font(.system(size: 11))
+                        Text("Capture Clicks")
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                    }
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.blue.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.blue.opacity(0.2), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Open Mouse Click Capture Tool")
                 
                 // Connection Status & Active Mouse Dropdown
                 HStack(spacing: 6) {
@@ -241,6 +258,9 @@ public struct SettingsView: View {
                         ScrollView {
                             VStack(spacing: 8) {
                                 let listMappings = settings.mappings.filter { mapping in
+                                    let matchesProfile = (mapping.profileName == settings.activeProfile)
+                                    guard matchesProfile else { return false }
+                                    
                                     let matchesDevice = (selectedDevice == "All Devices" || mapping.deviceName == selectedDevice)
                                     if selectedTab == "Buttons" {
                                         switch mapping.trigger {
@@ -372,6 +392,73 @@ public struct SettingsView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding()
                         
+                    } else if selectedTab == "Profiles" {
+                        VStack(alignment: .leading, spacing: 20) {
+                            Text("Profile Management")
+                                .font(.headline)
+                            
+                            HStack(spacing: 12) {
+                                TextField("New Profile Name", text: $newProfileName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 200)
+                                
+                                Button("Create Profile") {
+                                    let trimmed = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !trimmed.isEmpty && !settings.profiles.contains(trimmed) {
+                                        settings.profiles.append(trimmed)
+                                        newProfileName = ""
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                            
+                            Text("Profiles List:")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            ScrollView {
+                                VStack(spacing: 8) {
+                                    ForEach(settings.profiles, id: \.self) { profile in
+                                        HStack {
+                                            HStack(spacing: 6) {
+                                                Image(systemName: settings.activeProfile == profile ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundColor(settings.activeProfile == profile ? .green : .secondary)
+                                                Text(profile)
+                                                    .fontWeight(settings.activeProfile == profile ? .bold : .regular)
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            if profile != "Default" {
+                                                Button(action: {
+                                                    // Delete profile and remove all mappings mapped to it
+                                                    settings.profiles.removeAll(where: { $0 == profile })
+                                                    settings.mappings.removeAll(where: { $0.profileName == profile })
+                                                    if settings.activeProfile == profile {
+                                                        settings.activeProfile = "Default"
+                                                    }
+                                                }) {
+                                                    Image(systemName: "trash")
+                                                        .foregroundColor(.red)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        .padding(10)
+                                        .background(Color(NSColor.textBackgroundColor))
+                                        .cornerRadius(6)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            settings.activeProfile = profile
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        
                     } else if selectedTab == "Cursor" {
                         VStack(alignment: .leading, spacing: 20) {
                             Text("Cursor Movement Settings")
@@ -427,6 +514,78 @@ public struct SettingsView: View {
                             .listStyle(.inset)
                         }
                         .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        
+                    } else if selectedTab == "HID Inspector" {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Raw HID Traffic (Capped at 100)")
+                                    .font(.headline)
+                                Spacer()
+                                Button("Clear Log") {
+                                    tapManager.rawHIDEvents.removeAll()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 4) {
+                                    if tapManager.rawHIDEvents.isEmpty {
+                                        VStack(spacing: 8) {
+                                            Image(systemName: "cpu")
+                                                .font(.system(size: 24))
+                                                .foregroundColor(.secondary.opacity(0.5))
+                                            Text("No HID events captured yet. Move or click your mouse...")
+                                                .foregroundColor(.secondary)
+                                                .font(.caption)
+                                                .italic()
+                                        }
+                                        .padding()
+                                        .frame(maxWidth: .infinity)
+                                    } else {
+                                        ForEach(tapManager.rawHIDEvents) { event in
+                                            HStack(spacing: 8) {
+                                                // Short format timestamp
+                                                let formatter: DateFormatter = {
+                                                    let f = DateFormatter()
+                                                    f.dateFormat = "HH:mm:ss.SSS"
+                                                    return f
+                                                }()
+                                                
+                                                Text(formatter.string(from: event.timestamp))
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .foregroundColor(.secondary)
+                                                
+                                                Text(event.deviceName)
+                                                    .font(.caption)
+                                                    .fontWeight(.bold)
+                                                    .foregroundColor(.blue)
+                                                
+                                                Spacer()
+                                                
+                                                Text("VID: \(String(format: "0x%04X", event.vendorID)) PID: \(String(format: "0x%04X", event.productID))")
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .foregroundColor(.secondary)
+                                                
+                                                Text("Page: \(String(format: "0x%02X", event.usagePage)) Usage: \(String(format: "0x%02X", event.usage))")
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .foregroundColor(.orange)
+                                                
+                                                Text("Val: \(event.value)")
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .fontWeight(.semibold)
+                                                    .foregroundColor(event.value == 0 ? .secondary : .green)
+                                            }
+                                            .padding(6)
+                                            .background(Color(NSColor.textBackgroundColor))
+                                            .cornerRadius(4)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(20)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         
                     } else { // License & Support
@@ -556,6 +715,9 @@ public struct SettingsView: View {
                 onSave: saveNewMapping
             )
         }
+        .sheet(isPresented: $showingCaptureSheet) {
+            MouseCaptureSheet(isPresented: $showingCaptureSheet, selectedDevice: selectedDevice)
+        }
         .onAppear {
             self.startAtLogin = checkStartAtLoginStatus()
             self.isTrusted = AXIsProcessTrusted()
@@ -576,34 +738,6 @@ public struct SettingsView: View {
                 } else {
                     print("[SettingsView] Accessibility permissions revoked. Stopping tap.")
                     tapManager.stop()
-                }
-            }
-        }
-        .onReceive(tapManager.$lastActiveTrigger) { trigger in
-            if let trigger = trigger {
-                self.highlightedTrigger = trigger
-                
-                // Automatically switch tabs based on trigger type to assist the user
-                switch trigger {
-                case .button(let num):
-                    selectedTab = "Buttons"
-                    // Only sync device dropdown on extra mouse buttons (Button 2 and higher)
-                    if num > 1 {
-                        if tapManager.connectedMice.contains(tapManager.lastActiveDeviceName) {
-                            selectedDevice = tapManager.lastActiveDeviceName
-                        }
-                    }
-                case .mouseKey, .systemEvent:
-                    selectedTab = "Buttons"
-                    if tapManager.connectedMice.contains(tapManager.lastActiveDeviceName) {
-                        selectedDevice = tapManager.lastActiveDeviceName
-                    }
-                case .scroll:
-                    selectedTab = "Wheel"
-                    // Always sync device dropdown on scroll events
-                    if tapManager.connectedMice.contains(tapManager.lastActiveDeviceName) {
-                        selectedDevice = tapManager.lastActiveDeviceName
-                    }
                 }
             }
         }
@@ -631,10 +765,10 @@ public struct SettingsView: View {
         )
         
         let shortcut = KeyboardShortcut(keyCode: selectedKeyCode, modifiers: mods)
-        let newMapping = MouseMapping(trigger: trigger, shortcut: shortcut, deviceName: selectedDevice)
+        let newMapping = MouseMapping(trigger: trigger, shortcut: shortcut, deviceName: selectedDevice, profileName: settings.activeProfile)
         
-        // Append or replace mapping if trigger and device name match
-        if let idx = settings.mappings.firstIndex(where: { $0.trigger == trigger && $0.deviceName == selectedDevice }) {
+        // Append or replace mapping if trigger and device name match in the current profile
+        if let idx = settings.mappings.firstIndex(where: { $0.trigger == trigger && $0.deviceName == selectedDevice && $0.profileName == settings.activeProfile }) {
             settings.mappings[idx] = newMapping
         } else {
             settings.mappings.append(newMapping)
@@ -866,5 +1000,233 @@ struct AddMappingSheet: View {
         isRecording = false
         EventTapManager.shared.isRecording = false
         EventTapManager.shared.onMouseTriggerDetected = nil
+    }
+}
+
+// Dialog sheet component to capture mouse clicks/scrolls and map them
+struct MouseCaptureSheet: View {
+    @Binding var isPresented: Bool
+    @ObservedObject var settings = AppSettings.shared
+    @ObservedObject var tapManager = EventTapManager.shared
+    
+    @State private var capturedTriggers: [MouseTrigger] = []
+    @State private var selectedTriggerForMapping: MouseTrigger? = nil
+    
+    // Form state for creating a mapping from the captured event
+    @State private var selectedKeyCode: CGKeyCode = 124 // Right arrow default
+    @State private var modifierCommand = false
+    @State private var modifierControl = false
+    @State private var modifierOption = false
+    @State private var modifierShift = false
+    
+    @State private var isHoveringClear = false
+    @State private var isHoveringClose = false
+    @State private var hoveredTriggerForMapping: MouseTrigger? = nil
+    
+    var selectedDevice: String
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Mouse Click Capture Tool")
+                .font(.headline)
+                .padding(.top, 16)
+            
+            Text("Click any mouse buttons or scroll to log events. Clicks are intercepted globally, but mouse capture is paused while hovering over the Clear, Close, or Plus buttons so they remain clickable.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+            
+            VStack {
+                HStack {
+                    Text("Captured Events:")
+                        .font(.subheadline)
+                        .fontWeight(.bold)
+                    Spacer()
+                    Button("Clear") {
+                        capturedTriggers.removeAll()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .onHover { hovering in
+                        isHoveringClear = hovering
+                        tapManager.isHoveringControl = hovering
+                    }
+                    .background(isHoveringClear ? Color.red.opacity(0.15) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(isHoveringClear ? Color.red.opacity(0.6) : Color.clear, lineWidth: 1.5)
+                    )
+                    .scaleEffect(isHoveringClear ? 1.05 : 1.0)
+                    .animation(.easeInOut(duration: 0.15), value: isHoveringClear)
+                    .help("When the mouse cursor is on the clear, close, or plus button, it will not capture any event.")
+                }
+                .padding(.horizontal, 20)
+                
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        if capturedTriggers.isEmpty {
+                            Text("Waiting for mouse inputs...")
+                                .foregroundColor(.secondary)
+                                .italic()
+                                .font(.caption)
+                                .padding(.top, 40)
+                        } else {
+                            ForEach(capturedTriggers, id: \.self) { trigger in
+                                HStack {
+                                    Image(systemName: trigger.displayName.contains("Scroll") ? "arrow.up.and.down" : "mouse")
+                                        .foregroundColor(.blue)
+                                    
+                                    Text(trigger.displayName)
+                                        .font(.system(.body, design: .rounded))
+                                        .fontWeight(.medium)
+                                    
+                                    Spacer()
+                                    
+                                    Button(action: {
+                                        selectedKeyCode = 124
+                                        modifierCommand = false
+                                        modifierControl = false
+                                        modifierOption = false
+                                        modifierShift = false
+                                        selectedTriggerForMapping = trigger
+                                    }) {
+                                        Image(systemName: "plus.circle.fill")
+                                            .foregroundColor(.green)
+                                            .font(.title2)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .onHover { hovering in
+                                        tapManager.isHoveringControl = hovering
+                                        if hovering {
+                                            hoveredTriggerForMapping = trigger
+                                        } else if hoveredTriggerForMapping == trigger {
+                                            hoveredTriggerForMapping = nil
+                                        }
+                                    }
+                                    .scaleEffect(hoveredTriggerForMapping == trigger ? 1.15 : 1.0)
+                                    .animation(.easeInOut(duration: 0.15), value: hoveredTriggerForMapping)
+                                    .help("When the mouse cursor is on the clear, close, or plus button, it will not capture any event.")
+                                    .popover(isPresented: Binding(
+                                        get: { selectedTriggerForMapping == trigger },
+                                        set: { val in
+                                            if val {
+                                                selectedTriggerForMapping = trigger
+                                            } else if selectedTriggerForMapping == trigger {
+                                                selectedTriggerForMapping = nil
+                                            }
+                                        }
+                                    )) {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            Text("Map: \(trigger.displayName)")
+                                                .font(.headline)
+                                            
+                                            Text("Choose target keyboard shortcut:")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            
+                                            HStack(spacing: 8) {
+                                                Toggle("⌘ Cmd", isOn: $modifierCommand)
+                                                Toggle("⌃ Ctrl", isOn: $modifierControl)
+                                                Toggle("⌥ Opt", isOn: $modifierOption)
+                                                Toggle("⇧ Shift", isOn: $modifierShift)
+                                            }
+                                            .toggleStyle(.checkbox)
+                                            .font(.subheadline)
+                                            
+                                            HStack {
+                                                Text("Action Key:")
+                                                    .font(.subheadline)
+                                                Picker("", selection: $selectedKeyCode) {
+                                                    ForEach(availableKeys) { key in
+                                                        Text(key.name).tag(key.keyCode)
+                                                    }
+                                                }
+                                                .labelsHidden()
+                                            }
+                                            
+                                            Button("Add Mapping") {
+                                                let mods = ModifierFlags(
+                                                    command: modifierCommand,
+                                                    control: modifierControl,
+                                                    option: modifierOption,
+                                                    shift: modifierShift
+                                                )
+                                                let shortcut = KeyboardShortcut(keyCode: selectedKeyCode, modifiers: mods)
+                                                let newMapping = MouseMapping(
+                                                    trigger: trigger,
+                                                    shortcut: shortcut,
+                                                    deviceName: selectedDevice,
+                                                    profileName: settings.activeProfile
+                                                )
+                                                
+                                                if let existingIdx = settings.mappings.firstIndex(where: {
+                                                    $0.trigger == trigger &&
+                                                    $0.deviceName == selectedDevice &&
+                                                    $0.profileName == settings.activeProfile
+                                                }) {
+                                                    settings.mappings[existingIdx] = newMapping
+                                                } else {
+                                                    settings.mappings.append(newMapping)
+                                                }
+                                                
+                                                selectedTriggerForMapping = nil
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                        }
+                                        .padding(16)
+                                        .frame(width: 320)
+                                    }
+                                }
+                                .padding(10)
+                                .background(Color(NSColor.textBackgroundColor))
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .frame(maxHeight: .infinity)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(10)
+                .padding(.horizontal, 20)
+            }
+            
+            Button("Close") {
+                isPresented = false
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .frame(width: 100)
+            .onHover { hovering in
+                isHoveringClose = hovering
+                tapManager.isHoveringControl = hovering
+            }
+            .background(isHoveringClose ? Color.blue.opacity(0.15) : Color.clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isHoveringClose ? Color.blue.opacity(0.6) : Color.clear, lineWidth: 1.5)
+            )
+            .scaleEffect(isHoveringClose ? 1.03 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: isHoveringClose)
+            .help("When the mouse cursor is on the clear, close, or plus button, it will not capture any event.")
+            .padding(.bottom, 16)
+        }
+        .frame(width: 440, height: 480)
+        .onAppear {
+            capturedTriggers.removeAll()
+            tapManager.isHoveringControl = false
+            tapManager.isRecording = true
+            tapManager.onMouseTriggerDetected = { trigger in
+                if !capturedTriggers.contains(trigger) {
+                    capturedTriggers.append(trigger)
+                }
+            }
+        }
+        .onDisappear {
+            tapManager.isHoveringControl = false
+            tapManager.isRecording = false
+            tapManager.onMouseTriggerDetected = nil
+        }
     }
 }

@@ -48,9 +48,15 @@ public final class EventTapManager: ObservableObject {
     // IOHIDManager for physical mouse detection
     private var hidManager: IOHIDManager?
     @Published public var connectedMice: [String] = ["All Devices"]
+    @Published public var connectedMouseDeviceKeys = Set<String>()
+    private var registryIDCache = [UInt64: (vendorID: Int, productID: Int)]()
     @Published public var lastActiveDeviceName: String = "All Devices"
+    @Published public var lastActiveDeviceVendorID: Int = 0
+    @Published public var lastActiveDeviceProductID: Int = 0
     @Published public var lastActiveTrigger: MouseTrigger? = nil
     @Published public var lastActiveKeyEvent: String = "None"
+    @Published public var rawHIDEvents: [RawHIDEvent] = []
+    @Published public var isHoveringControl = false
     
     // Scroll Drag State tracking for mapping button to "Scroll (Drag Mouse)"
     private var isScrollDragActive = false
@@ -194,10 +200,30 @@ public final class EventTapManager: ObservableObject {
         IOHIDManagerRegisterInputValueCallback(manager, { (context, result, sender, value) in
             guard let sender = sender, let context = context else { return }
             let device = Unmanaged<IOHIDDevice>.fromOpaque(sender).takeUnretainedValue()
-            if let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String {
-                let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
-                if manager.lastActiveDeviceName != name {
-                    manager.lastActiveDeviceName = name
+            let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "Unknown Device"
+            
+            let manager = Unmanaged<EventTapManager>.fromOpaque(context).takeUnretainedValue()
+            if manager.lastActiveDeviceName != name {
+                manager.lastActiveDeviceName = name
+            }
+            
+            let vendorID = IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0
+            let productID = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0
+            if manager.lastActiveDeviceVendorID != vendorID || manager.lastActiveDeviceProductID != productID {
+                manager.lastActiveDeviceVendorID = vendorID
+                manager.lastActiveDeviceProductID = productID
+            }
+            
+            let element = IOHIDValueGetElement(value)
+            let usagePage = Int(IOHIDElementGetUsagePage(element))
+            let usage = Int(IOHIDElementGetUsage(element))
+            let val = IOHIDValueGetIntegerValue(value)
+            
+            DispatchQueue.main.async {
+                let event = RawHIDEvent(deviceName: name, vendorID: vendorID, productID: productID, usagePage: usagePage, usage: usage, value: val)
+                manager.rawHIDEvents.insert(event, at: 0)
+                if manager.rawHIDEvents.count > 100 {
+                    manager.rawHIDEvents.removeLast()
                 }
             }
         }, selfPointer)
@@ -212,13 +238,66 @@ public final class EventTapManager: ObservableObject {
         updateConnectedMice()
     }
     
+    private func getDeviceIdentifiers(registryID: UInt64) -> (vendorID: Int, productID: Int)? {
+        if let cached = registryIDCache[registryID] {
+            return cached
+        }
+        
+        let matchingDict = IORegistryEntryIDMatching(registryID)
+        guard matchingDict != nil else { return nil }
+        
+        let entry = IOServiceGetMatchingService(0, matchingDict)
+        guard entry != 0 else { return nil }
+        defer { IOObjectRelease(entry) }
+        
+        let vendorVal = IORegistryEntrySearchCFProperty(
+            entry,
+            kIOServicePlane,
+            kIOHIDVendorIDKey as CFString,
+            kCFAllocatorDefault,
+            IOOptionBits(kIORegistryIterateParents | kIORegistryIterateRecursively)
+        )
+        
+        let productVal = IORegistryEntrySearchCFProperty(
+            entry,
+            kIOServicePlane,
+            kIOHIDProductIDKey as CFString,
+            kCFAllocatorDefault,
+            IOOptionBits(kIORegistryIterateParents | kIORegistryIterateRecursively)
+        )
+        
+        let vendorID = vendorVal as? Int ?? 0
+        let productID = productVal as? Int ?? 0
+        
+        let ids = (vendorID, productID)
+        registryIDCache[registryID] = ids
+        return ids
+    }
+    
+    public func isEventFromMouse(event: CGEvent) -> Bool {
+        let registryID = event.getIntegerValueField(CGEventField(rawValue: 87)!)
+        if registryID != 0 {
+            if let ids = getDeviceIdentifiers(registryID: UInt64(registryID)) {
+                let key = "\(ids.vendorID)-\(ids.productID)"
+                if connectedMouseDeviceKeys.contains(key) {
+                    return true
+                }
+            }
+        }
+        let key = "\(lastActiveDeviceVendorID)-\(lastActiveDeviceProductID)"
+        if connectedMouseDeviceKeys.contains(key) {
+            return true
+        }
+        return self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+    }
+    
     public func updateConnectedMice() {
         guard let manager = hidManager else { return }
         var miceNames: [String] = ["All Devices"]
+        var deviceKeys = Set<String>()
         
         if let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> {
             for device in devices {
-                // Filter out non-mice (we only add devices where primary usage is 0x02 to miceNames)
                 let usage = IOHIDDeviceGetProperty(device, "PrimaryUsage" as CFString) as? Int ?? 0
                 let usagePage = IOHIDDeviceGetProperty(device, "PrimaryUsagePage" as CFString) as? Int ?? 0
                 if usage == 0x02 && usagePage == 0x01 {
@@ -227,13 +306,21 @@ public final class EventTapManager: ObservableObject {
                             miceNames.append(name)
                         }
                     }
+                    let vendorID = IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0
+                    let productID = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0
+                    if vendorID != 0 && productID != 0 {
+                        deviceKeys.insert("\(vendorID)-\(productID)")
+                    }
                 }
             }
         }
         
         DispatchQueue.main.async {
             self.connectedMice = miceNames
-            print("[EventTapManager] Connected mice: \(self.connectedMice)")
+            self.connectedMouseDeviceKeys = deviceKeys
+            let msg = "[EventTapManager] Connected mice: \(self.connectedMice), keys: \(self.connectedMouseDeviceKeys)"
+            print(msg)
+            self.logEventToFile(msg)
         }
     }
     
@@ -294,7 +381,8 @@ public final class EventTapManager: ObservableObject {
 
         // Log all captured events to file for diagnostics
         let typeVal = type.rawValue
-        var logMsg = "Event Type: \(typeVal)"
+        let regID = event.getIntegerValueField(CGEventField(rawValue: 87)!)
+        var logMsg = "Event Type: \(typeVal) (RegID: \(regID))"
         
         if type == .keyDown || type == .keyUp {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -323,22 +411,29 @@ public final class EventTapManager: ObservableObject {
         logEventToFile(logMsg)
         
         // Intercept keyboard events for Stage Manager toggle
-        if type == .keyDown || type == .keyUp {
+        if type == .keyDown || type == .keyUp || type == .flagsChanged {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags
             
             // Log keyboard event for real-time debug display
-            DispatchQueue.main.async {
-                let name = nameForKeyCode(CGKeyCode(keyCode))
-                self.lastActiveKeyEvent = "Key \(type == .keyDown ? "Down" : "Up"): \(keyCode) (\(name))"
+            if type == .keyDown || type == .keyUp {
+                DispatchQueue.main.async {
+                    let name = nameForKeyCode(CGKeyCode(keyCode))
+                    self.lastActiveKeyEvent = "Key \(type == .keyDown ? "Down" : "Up"): \(keyCode) (\(name))"
+                }
+            } else if type == .flagsChanged {
+                DispatchQueue.main.async {
+                    let name = nameForKeyCode(CGKeyCode(keyCode))
+                    self.lastActiveKeyEvent = "FlagsChanged Key: \(keyCode) (\(name)) Flags: \(flags.rawValue)"
+                }
             }
             
             let isStageManagerActive = AppSettings.shared.toggleStageManagerOnShowDesktop
             let isMissionControlActive = AppSettings.shared.toggleMissionControlOnShowDesktop
             
-            if isStageManagerActive || isMissionControlActive {
+            if (type == .keyDown || type == .keyUp) && (isStageManagerActive || isMissionControlActive) {
                 // Identify if the event originated from a registered mouse device (ignoring actual keyboards)
-                let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+                let isFromMouse = self.isEventFromMouse(event: event)
                 
                 let isF11 = (keyCode == 103)
                 let isCmdF3 = (keyCode == 99 && flags.contains(.maskCommand))
@@ -360,41 +455,9 @@ public final class EventTapManager: ObservableObject {
                 }
             }
             
-            // If it is a key event from the mouse, we want to intercept it and not let it pass through
-            let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
-            if isFromMouse && !isRecording {
-                // Check if we have a mapping for this mouse key
-                let trigger = MouseTrigger.mouseKey(Int(keyCode))
-                let activeDevice = self.lastActiveDeviceName
-                if AppSettings.shared.mappings.contains(where: { 
-                    $0.trigger == trigger && 
-                    $0.isEnabled && 
-                    ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
-                }) {
-                    // Let the mapping code handle it below
-                } else {
-                    return event // Let standard unmapped mouse keyboard events through
-                }
-            } else if !isFromMouse {
-                return event // Let all other keyboard events pass through immediately!
-            }
-        }
-        
-        // Log flagsChanged and systemDefined events to settings view
-        if type == .flagsChanged {
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            let flags = event.flags
-            
-            DispatchQueue.main.async {
-                let name = nameForKeyCode(CGKeyCode(keyCode))
-                self.lastActiveKeyEvent = "FlagsChanged Key: \(keyCode) (\(name)) Flags: \(flags.rawValue)"
-            }
-            
-            // Swallow modifier key events (Command is keycode 54 or 55) if they originate from the mouse
-            let isStageManagerActive = AppSettings.shared.toggleStageManagerOnShowDesktop
-            let isMissionControlActive = AppSettings.shared.toggleMissionControlOnShowDesktop
-            if isStageManagerActive || isMissionControlActive {
-                let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
+            // Swallow modifier key events (Command is keycode 54 or 55) if Stage Manager / Mission Control is active
+            if type == .flagsChanged && (isStageManagerActive || isMissionControlActive) {
+                let isFromMouse = self.isEventFromMouse(event: event)
                 if (keyCode == 54 || keyCode == 55) && isFromMouse {
                     // On key release (Flags: 256, no command mask)
                     if !flags.contains(.maskCommand) && isMissionControlActive {
@@ -403,6 +466,29 @@ public final class EventTapManager: ObservableObject {
                     }
                     return nil // Swallow the Command key press/release from the mouse!
                 }
+            }
+            
+            // If it is a key event from the mouse, we want to intercept it and not let it pass through
+            let isFromMouse = self.isEventFromMouse(event: event)
+            if isFromMouse && !isRecording {
+                // Check if we have a mapping for this mouse key (with modifiers)
+                if let trigger = detectTrigger(type: type, event: event) {
+                    let activeDevice = self.lastActiveDeviceName
+                    if AppSettings.shared.mappings.contains(where: { 
+                        $0.trigger == trigger && 
+                        $0.isEnabled && 
+                        $0.profileName == AppSettings.shared.activeProfile &&
+                        ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
+                    }) {
+                        // Let the mapping code handle it below
+                    } else {
+                        return event // Let standard unmapped mouse keyboard events through
+                    }
+                } else {
+                    return event
+                }
+            } else if !isFromMouse {
+                return event // Let all other keyboard events pass through immediately!
             }
         } else if typeVal == 14 {
             let nsEvent = NSEvent(cgEvent: event)
@@ -416,9 +502,18 @@ public final class EventTapManager: ObservableObject {
         
         // 1. Handle recording mode (recording a trigger in Settings)
         if isRecording {
+            if isHoveringControl {
+                return event // Let the click through so controls can be clicked!
+            }
             if let trigger = detectTrigger(type: type, event: event) {
-                // Ensure we record on the "Down" action, key down, scroll, or systemDefined events
-                if isDownEvent(type: type) || type == .scrollWheel || type == .keyDown || type.rawValue == 14 {
+                // Ensure we record on the "Down" action, key down, scroll, systemDefined, or flagsChanged down events
+                let isDown = isDownEvent(type: type) || 
+                             type == .scrollWheel || 
+                             type == .keyDown || 
+                             type.rawValue == 14 || 
+                             (type == .flagsChanged && isFlagsChangedDown(event: event))
+                             
+                if isDown {
                     DispatchQueue.main.async {
                         self.onMouseTriggerDetected?(trigger)
                     }
@@ -450,11 +545,17 @@ public final class EventTapManager: ObservableObject {
             if let mapping = AppSettings.shared.mappings.first(where: { 
                 $0.trigger == trigger && 
                 $0.isEnabled && 
+                $0.profileName == AppSettings.shared.activeProfile &&
                 ($0.deviceName == "All Devices" || $0.deviceName == activeDevice)
             }) {
                 // Check if mapping is a virtual scroll action
                 if mapping.shortcut.keyCode >= 2000 && mapping.shortcut.keyCode <= 2004 {
-                    let isDown = isDownEvent(type: type) || type == .keyDown
+                    let isDown: Bool
+                    if type == .flagsChanged {
+                        isDown = isFlagsChangedDown(event: event)
+                    } else {
+                        isDown = isDownEvent(type: type) || type == .keyDown
+                    }
                     if isDown {
                         if mapping.shortcut.keyCode == 2004 {
                             // "Scroll (Drag Mouse)"
@@ -488,7 +589,12 @@ public final class EventTapManager: ObservableObject {
                     if isDragEvent(type: type) {
                         return nil // Swallow drag events for mapped buttons without triggering key actions
                     }
-                    let isDown = isDownEvent(type: type) || type == .keyDown
+                    let isDown: Bool
+                    if type == .flagsChanged {
+                        isDown = isFlagsChangedDown(event: event)
+                    } else {
+                        isDown = isDownEvent(type: type) || type == .keyDown
+                    }
                     KeySimulator.shared.simulateShortcut(
                         keyCode: mapping.shortcut.keyCode,
                         modifiers: mapping.shortcut.modifiers,
@@ -514,6 +620,18 @@ public final class EventTapManager: ObservableObject {
     /// Helper to identify if an event represents a button click down
     private func isDownEvent(type: CGEventType) -> Bool {
         return type == .otherMouseDown || type == .leftMouseDown || type == .rightMouseDown
+    }
+    
+    private func isFlagsChangedDown(event: CGEvent) -> Bool {
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let flags = event.flags
+        switch keyCode {
+        case 54, 55: return flags.contains(.maskCommand)
+        case 56, 60: return flags.contains(.maskShift)
+        case 59, 62: return flags.contains(.maskControl)
+        case 58, 61: return flags.contains(.maskAlternate)
+        default: return false
+        }
     }
     
     /// Helper to identify if an event represents a button click drag
@@ -548,11 +666,35 @@ public final class EventTapManager: ObservableObject {
             let buttonNum = event.getIntegerValueField(.mouseEventButtonNumber)
             return .button(Int(buttonNum))
             
-        case .keyDown, .keyUp:
-            let isFromMouse = self.connectedMice.contains(self.lastActiveDeviceName) && self.lastActiveDeviceName != "All Devices"
-            if isFromMouse {
+        case .keyDown, .keyUp, .flagsChanged:
+            if self.isEventFromMouse(event: event) {
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-                return .mouseKey(Int(keyCode))
+                let flags = event.flags
+                
+                var hasCmd = flags.contains(.maskCommand)
+                var hasCtrl = flags.contains(.maskControl)
+                var hasOpt = flags.contains(.maskAlternate)
+                var hasShift = flags.contains(.maskShift)
+                
+                // For flagsChanged, if the key itself is a modifier, we force its flag to be true
+                // so that the release event (which has the flag cleared) still matches the trigger.
+                if type == .flagsChanged {
+                    switch keyCode {
+                    case 54, 55: hasCmd = true
+                    case 56, 60: hasShift = true
+                    case 59, 62: hasCtrl = true
+                    case 58, 61: hasOpt = true
+                    default: break
+                    }
+                }
+                
+                return .mouseKey(
+                    keyCode: Int(keyCode),
+                    hasCmd: hasCmd,
+                    hasCtrl: hasCtrl,
+                    hasOpt: hasOpt,
+                    hasShift: hasShift
+                )
             }
             
         case .scrollWheel:
